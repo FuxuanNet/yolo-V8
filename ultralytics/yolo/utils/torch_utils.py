@@ -287,7 +287,12 @@ def strip_optimizer(f='best.pt', s=''):
     Returns:
         None
     """
-    x = torch.load(f, map_location=torch.device('cpu'))
+    try:
+        from ultralytics.nn.tasks import DetectionModel
+        torch.serialization.add_safe_globals([DetectionModel])
+    except ImportError:
+        pass
+    x = torch.load(f, map_location=torch.device('cpu'),  weights_only=False)
     args = {**DEFAULT_CONFIG_DICT, **x['train_args']}  # combine model args with default args, preferring model args
     if x.get('ema'):
         x['model'] = x['ema']  # replace model with ema

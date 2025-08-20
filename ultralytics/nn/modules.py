@@ -347,6 +347,77 @@ class Concat(nn.Module):
     def forward(self, x):
         return torch.cat(x, self.d)
 
+class EMA(nn.Module):
+    """Efficient Multi-Scale Attention (EMA) - 安全版"""
+    def __init__(self, channels, groups=8):
+        super().__init__()
+        # 自动修正 groups，避免 channels % groups != 0 报错
+        if channels % groups != 0:
+            for g in range(groups, 0, -1):
+                if channels % g == 0:
+                    groups = g
+                    break
+
+        self.groups = groups
+        self.group_channels = channels // groups
+
+        # 1x1 branch
+        self.conv1x1 = Conv(self.group_channels, self.group_channels, k=1)
+        self.conv1d = Conv(self.group_channels, self.group_channels, k=1)
+
+        # 3x3 branch
+        self.conv3x3 = Conv(self.group_channels, self.group_channels, k=3, p=1)
+        self.conv1d_3x3 = Conv(self.group_channels, self.group_channels, k=1)
+
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        assert H > 0 and W > 0, f"Invalid feature map size: {H}x{W}"
+
+        # 分组
+        x_grouped = x.view(B, self.groups, self.group_channels, H, W)
+
+        outs = []
+        for g in range(self.groups):
+            x_g = x_grouped[:, g]  # [B, Cg, H, W]
+
+            # 1x1 branch
+            x1 = self.conv1x1(x_g)
+            a_h = x1.mean(dim=2, keepdim=True)  # GAP over H
+            a_w = x1.mean(dim=3, keepdim=True)  # GAP over W
+            a_hw = a_h + a_w.permute(0, 1, 3, 2)
+            a1 = self.sigmoid(self.conv1d(a_hw))
+
+            # 3x3 branch
+            x3 = self.conv3x3(x_g)
+            b_h = x3.mean(dim=2, keepdim=True)
+            b_w = x3.mean(dim=3, keepdim=True)
+            b_hw = b_h + b_w.permute(0, 1, 3, 2)
+            a3 = self.sigmoid(self.conv1d_3x3(b_hw))
+
+            # 融合注意力
+            att = self.sigmoid(a1 * a3)
+            outs.append(x_g * att)
+
+        # 拼接输出
+        out = torch.stack(outs, dim=1).view(B, C, H, W)
+        return out
+
+
+class C2f_EMA(C2f):
+    """C2f module with EMA after second Bottleneck"""
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, ema_groups=8):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.ema = EMA(channels=self.c, groups=ema_groups)
+
+    def forward(self, x):
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        for i, m in enumerate(self.m):
+            y.append(m(y[-1]))
+            if i == 1:  # 在第二个 Bottleneck 后加 EMA
+                y[-1] = self.ema(y[-1])
+        return self.cv2(torch.cat(y, 1))
 
 class Proto(nn.Module):
     # YOLOv8 mask Proto module for segmentation models
@@ -459,3 +530,8 @@ class Classify(nn.Module):
         if isinstance(x, list):
             x = torch.cat(x, 1)
         return self.linear(self.drop(self.pool(self.conv(x)).flatten(1)))
+
+
+__all__ = ('Classify', 'Concat', 'Conv', 'ConvTranspose', 'Detect', 'DWConv', 'DWConvTranspose2d', 'EMA', 'C2f_EMA',
+           'Ensemble', 'Focus', 'GhostConv', 'Segment', 'Bottleneck', 'BottleneckCSP', 'C1', 'C2', 'C2f', 'C3', 'C3TR', 'C3Ghost',
+           'C3x', 'GhostBottleneck', 'SPP', 'SPPF')

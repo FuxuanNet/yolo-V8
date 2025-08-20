@@ -149,3 +149,6 @@ wandb/
 *_web_model/
 *_openvino_model/
 *_paddle_model/
+/001-500
+/501-1100
+/dataset
