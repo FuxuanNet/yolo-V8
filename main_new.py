@@ -53,61 +53,72 @@ def convert_json_to_yolo_tiles(
         data = json.load(f)
 
     stride = tile_size - overlap
+
+    # 先生成所有切片的位置信息（与tile_image函数完全一致）
+    tile_positions = []
+    for y in range(0, img_height - overlap, stride):
+        for x in range(0, img_width - overlap, stride):
+            # 确保最后一块能覆盖到边缘
+            end_x = min(x + tile_size, img_width)
+            end_y = min(y + tile_size, img_height)
+            start_x = max(0, end_x - tile_size)
+            start_y = max(0, end_y - tile_size)
+            tile_positions.append((start_x, start_y))
+
+    # 为每个切片创建标注字典，使用索引作为键
     tiles_annotations = {}
+    for i in range(len(tile_positions)):
+        tiles_annotations[f"tile_{i}"] = []
 
-    # 计算需要的切片数量
-    n_tiles_x = (img_width + stride - 1) // stride
-    n_tiles_y = (img_height + stride - 1) // stride
-
-    # 初始化每个切片的标注列表
-    for y in range(n_tiles_y):
-        for x in range(n_tiles_x):
-            tiles_annotations[f"{x}_{y}"] = []
-
+    # 处理每个标注框
     for shape in data["shapes"]:
-        if shape["shape_type"] == "rectangle":
+        if (
+            shape["shape_type"] == "rectangle"
+            and "points" in shape
+            and len(shape["points"]) == 2
+        ):
             points = shape["points"]
             x1, y1 = points[0]
             x2, y2 = points[1]
 
-            # 对于每个边界框，找到它属于哪些切片
-            min_tile_x = int(min(x1, x2)) // stride
-            max_tile_x = int(max(x1, x2)) // stride
-            min_tile_y = int(min(y1, y2)) // stride
-            max_tile_y = int(max(y1, y2)) // stride
+            # 确保坐标顺序正确
+            x_min = min(x1, x2)
+            y_min = min(y1, y2)
+            x_max = max(x1, x2)
+            y_max = max(y1, y2)
 
-            # 为每个相关的切片创建标注
-            for tile_y in range(min_tile_y, max_tile_y + 1):
-                for tile_x in range(min_tile_x, max_tile_x + 1):
-                    if f"{tile_x}_{tile_y}" not in tiles_annotations:
-                        continue
+            # 检查每个切片是否与该边界框相交
+            for i, (tile_start_x, tile_start_y) in enumerate(tile_positions):
+                tile_end_x = tile_start_x + tile_size
+                tile_end_y = tile_start_y + tile_size
 
-                    # 计算切片的边界
-                    tile_start_x = tile_x * stride
-                    tile_start_y = tile_y * stride
-                    tile_end_x = min(tile_start_x + tile_size, img_width)
-                    tile_end_y = min(tile_start_y + tile_size, img_height)
-                    tile_start_x = max(0, tile_end_x - tile_size)
-                    tile_start_y = max(0, tile_end_y - tile_size)
+                # 检查边界框是否与切片相交
+                if (
+                    x_max > tile_start_x
+                    and x_min < tile_end_x
+                    and y_max > tile_start_y
+                    and y_min < tile_end_y
+                ):
 
-                    # 调整边界框坐标到切片坐标系
-                    box_x1 = max(0, min(x1 - tile_start_x, tile_size))
-                    box_y1 = max(0, min(y1 - tile_start_y, tile_size))
-                    box_x2 = max(0, min(x2 - tile_start_x, tile_size))
-                    box_y2 = max(0, min(y2 - tile_start_y, tile_size))
+                    # 将边界框坐标转换到切片坐标系
+                    box_x1 = x_min - tile_start_x
+                    box_y1 = y_min - tile_start_y
+                    box_x2 = x_max - tile_start_x
+                    box_y2 = y_max - tile_start_y
 
-                    # 如果边界框在切片内
-                    if (
-                        box_x2 > 0
-                        and box_y2 > 0
-                        and box_x1 < tile_size
-                        and box_y1 < tile_size
-                    ):
+                    # 裁剪到切片边界内
+                    box_x1 = max(0, min(box_x1, tile_size))
+                    box_y1 = max(0, min(box_y1, tile_size))
+                    box_x2 = max(0, min(box_x2, tile_size))
+                    box_y2 = max(0, min(box_y2, tile_size))
+
+                    # 确保边界框有效
+                    if box_x2 > box_x1 and box_y2 > box_y1:
                         # 计算YOLO格式的标注
                         x_center = (box_x1 + box_x2) / (2 * tile_size)
                         y_center = (box_y1 + box_y2) / (2 * tile_size)
-                        width = abs(box_x2 - box_x1) / tile_size
-                        height = abs(box_y2 - box_y1) / tile_size
+                        width = (box_x2 - box_x1) / tile_size
+                        height = (box_y2 - box_y1) / tile_size
 
                         # 确保值在0-1范围内
                         x_center = max(0, min(1, x_center))
@@ -116,7 +127,7 @@ def convert_json_to_yolo_tiles(
                         height = max(0, min(1, height))
 
                         yolo_line = f"0 {x_center} {y_center} {width} {height}"
-                        tiles_annotations[f"{tile_x}_{tile_y}"].append(yolo_line)
+                        tiles_annotations[f"tile_{i}"].append(yolo_line)
 
     return tiles_annotations
 
@@ -156,18 +167,25 @@ def process_single_image(args):
         results = []
 
         for i, (tile, pos) in enumerate(zip(tiles, positions)):
-            tile_x, tile_y = pos[0] // (tile_size - overlap), pos[1] // (
-                tile_size - overlap
-            )
-            tile_name = f"{img_path.stem}_tile_{tile_x}_{tile_y}"
+            tile_key = f"tile_{i}"
 
             split_type = "train" if is_train else "val"
-            img_save_path = f"dataset/images/{split_type}/{tile_name}.png"
-            label_save_path = f"dataset/labels/{split_type}/{tile_name}.txt"
+            img_save_path = f"dataset/images/{split_type}/{img_path.stem}_tile_{i}.png"
+            label_save_path = (
+                f"dataset/labels/{split_type}/{img_path.stem}_tile_{i}.txt"
+            )
 
-            annotations = tiles_annotations.get(f"{tile_x}_{tile_y}", [])
+            annotations = tiles_annotations.get(tile_key, [])
             if annotations:
-                results.append((tile, img_save_path, annotations, label_save_path))
+                # 保存切片图像
+                cv2.imwrite(img_save_path, tile)
+
+                # 保存标注文件
+                with open(label_save_path, "w") as f:
+                    for annotation in annotations:
+                        f.write(annotation + "\n")
+
+                results.append((img_save_path, label_save_path, len(annotations)))
 
         # 清理内存
         del img, tiles, positions, tiles_annotations
@@ -227,10 +245,7 @@ def prepare_dataset(tile_size=1024, overlap=128):
         for img_path in tqdm(files, desc="处理图片"):
             results = process_single_image((img_path, is_train, tile_size, overlap))
             if results:
-                for tile, img_save_path, annotations, label_save_path in results:
-                    cv2.imwrite(img_save_path, tile)
-                    with open(label_save_path, "w", encoding="utf-8") as f:
-                        f.write("\n".join(annotations))
+                print(f"  -> 成功处理 {len(results)} 个切片")
 
             # 清理内存
             gc.collect()
@@ -281,12 +296,6 @@ def check_dataset_ready():
     train_labels = len(list(Path("dataset/labels/train").glob("*.txt")))
     val_labels = len(list(Path("dataset/labels/val").glob("*.txt")))
 
-    # if (
-    #     train_images == 880
-    #     and val_images == 220
-    #     and train_labels == train_images
-    #     and val_labels == val_images
-    # ):
     if train_labels == train_images and val_labels == val_images:
         print(f"\n检测到已存在的数据集:")
         print(f"训练集: {train_images}张图片和标签")
@@ -297,7 +306,19 @@ def check_dataset_ready():
 
 
 def train_model():
-    """训练模型"""
+    """训练模型
+
+    模型保存说明：
+    1. best.pt: 基于验证集mAP@0.5:0.95指标选择的最佳模型
+       - 每个epoch后评估验证集性能
+       - 如果当前mAP@0.5:0.95 > 历史最佳值，则保存为best.pt
+       - 主要评估指标：mAP@0.5:0.95, mAP@0.5, precision, recall
+
+    2. last.pt: 最后一个epoch的模型权重
+
+    3. epochX.pt: 每10个epoch保存一次的检查点(由save_period=10控制)
+       - epoch10.pt, epoch20.pt, epoch30.pt...
+    """
     model_path = "yolov8m.pt"
     yaml_path = "E:\\programming\\yolo-V8\\ultralytics\\models\\v8\\yolov8m.yaml"  # 你改过C2f_EMA的yaml文件
 
@@ -314,32 +335,10 @@ def train_model():
         print("\n警告：未检测到GPU，将使用CPU训练（训练速度会很慢）")
 
     model = YOLO(yaml_path)  # 初始化结构
-    # try:
-    #     model = YOLO(yaml_path)  # 初始化结构
-    #     if os.path.exists(model_path):
-    #         print(f"使用本地模型: {model_path}")
-    #         map_location = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-    #         torch.serialization.add_safe_globals([DetectionModel])
-    #         ckpt = torch.load(model_path, map_location=map_location, weights_only=False)
-    #         # 有些 pt 文件保存的是 {'model': state_dict}
-    #         if isinstance(ckpt, dict) and 'model' in ckpt:
-    #             state_dict = ckpt['model']
-    #         else:
-    #             state_dict = ckpt
-
-    #         # 加载到当前模型结构
-    #         model.model.load_state_dict(state_dict, strict=False)
-    #     else:
-    #         print("本地未找到模型文件")
-
-    # except Exception as e:
-    #     print(f"加载模型时出错: {str(e)}")
-    #     return
 
     print("\n开始训练...")
     try:
         if device == "0":
-
             suggested_batch_size = min(12, int(gpu_memory))
             batch_size = max(1, suggested_batch_size)
         else:
@@ -356,11 +355,10 @@ def train_model():
             augment=True,
             device=device,
             project="runs/train",
-            name="exp8",
+            name="exp9",
             save=True,
-            # save_period=10,
+            # save_period=10,  # YOLOv8不支持此参数，移除
             cache=False,
-            # amp=True,
             workers=0,
             exist_ok=True,
             pretrained=False,
@@ -376,7 +374,11 @@ def train_model():
         )
 
         print("\n训练完成！")
-        print(f"最佳模型保存在: {os.path.join('runs/train/exp8/weights/best.pt')}")
+        print(f"模型保存目录: runs/train/exp9/weights/")
+        print(f"  - best.pt: 验证集mAP@0.5:0.95最佳模型")
+        print(f"  - last.pt: 最后一个epoch的模型")
+        print(f"  - epochX.pt: 每10个epoch的检查点模型")
+        print(f"训练日志和指标图表保存在: runs/train/exp9/")
 
         # 清理GPU内存
         clean_gpu_memory()
@@ -384,6 +386,76 @@ def train_model():
     except Exception as e:
         print(f"训练过程中出错: {str(e)}")
         raise e
+
+
+def apply_nms(boxes, scores=None, nms_threshold=0.3):
+    """应用非极大值抑制，改进的重复框过滤"""
+    if len(boxes) == 0:
+        return []
+
+    boxes = np.array(boxes)
+    if scores is None:
+        scores = np.ones(len(boxes))  # 如果没有置信度分数，使用1.0
+    else:
+        scores = np.array(scores)
+
+    # 多步NMS策略
+    # 第一步：标准NMS
+    xywh_boxes = boxes.copy()
+    xywh_boxes[:, 2] = xywh_boxes[:, 2] - xywh_boxes[:, 0]  # width = x2 - x1
+    xywh_boxes[:, 3] = xywh_boxes[:, 3] - xywh_boxes[:, 1]  # height = y2 - y1
+
+    indices = cv2.dnn.NMSBoxes(
+        xywh_boxes.tolist(),
+        scores.tolist(),
+        score_threshold=0.0,
+        nms_threshold=nms_threshold,
+    )
+
+    if len(indices) > 0:
+        if isinstance(indices, tuple):
+            indices = indices[0]
+        # 确保indices是numpy数组并且是一维的
+        indices = np.array(indices)
+        if indices.ndim > 1:
+            indices = indices.flatten()
+        filtered_boxes = boxes[indices]
+        filtered_scores = scores[indices]
+
+        # 第二步：额外的重复检测，基于IoU的严格过滤
+        final_boxes = []
+        final_scores = []
+
+        for i, (box, score) in enumerate(zip(filtered_boxes, filtered_scores)):
+            keep = True
+            for existing_box in final_boxes:
+                iou = calculate_iou(box, existing_box)
+                if iou > 0.7:  # 更严格的IoU阈值
+                    keep = False
+                    break
+
+            if keep:
+                final_boxes.append(box)
+                final_scores.append(score)
+
+        return np.array(final_boxes)
+
+    return []
+
+
+def calculate_iou(box1, box2):
+    """计算两个边界框的交并比(IoU)"""
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+
+    inter_area = max(0, x2 - x1) * max(0, y2 - y1)
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+
+    iou = inter_area / (box1_area + box2_area - inter_area + 1e-6)
+    return iou
 
 
 def merge_predictions(predictions, original_shape, tile_size=640, overlap=128):
@@ -409,63 +481,38 @@ def merge_predictions(predictions, original_shape, tile_size=640, overlap=128):
         merged_scores = np.array(merged_scores)
         merged_classes = np.array(merged_classes)
 
-        # 执行NMS
-        indices = cv2.dnn.NMSBoxes(
-            merged_boxes.tolist(),
-            merged_scores.tolist(),
-            score_threshold=0.25,
-            nms_threshold=0.45,
-        )
+        # 应用改进的NMS
+        filtered_boxes = apply_nms(merged_boxes, merged_scores, nms_threshold=0.3)
 
-        if len(indices) > 0:
-            if isinstance(indices, tuple):  # OpenCV 3.x returns tuple
-                indices = indices[0]
+        if len(filtered_boxes) > 0:
+            # 找到对应的分数和类别
+            filtered_scores = []
+            filtered_classes = []
+            for filtered_box in filtered_boxes:
+                # 找到最匹配的原始框
+                best_match_idx = 0
+                best_iou = 0
+                for i, orig_box in enumerate(merged_boxes):
+                    iou = calculate_iou(filtered_box, orig_box)
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_match_idx = i
+
+                filtered_scores.append(merged_scores[best_match_idx])
+                filtered_classes.append(merged_classes[best_match_idx])
 
             return (
-                merged_boxes[indices],
-                merged_scores[indices],
-                merged_classes[indices],
+                filtered_boxes,
+                np.array(filtered_scores),
+                np.array(filtered_classes),
             )
 
     return [], [], []
 
 
-def process_single_prediction(args):
-    """处理单个切片的预测
-
-    Args:
-        args: (model, tile, pos) 元组
-    """
-    model, tile, pos = args
-    pred = model.predict(tile, conf=0.25)
-    if len(pred) > 0 and len(pred[0].boxes) > 0:
-        # 调整预测框的坐标到原图坐标系 - 修改这部分
-        # 创建预测结果的副本，避免直接修改原始张量
-        # 方法1: 使用clone创建副本
-        boxes_copy = pred[0].boxes.clone()
-        for i, box in enumerate(boxes_copy):
-            # 创建新张量而不是原地修改
-            new_xyxy = box.xyxy.clone()
-            new_xyxy[:, [0, 2]] += pos[0]
-            new_xyxy[:, [1, 3]] += pos[1]
-            boxes_copy[i].xyxy = new_xyxy
-        all_predictions.append(boxes_copy)
-
-        # 方法2: 或者更简洁的方式，使用非原地操作（二选一）
-        # boxes_copy = pred[0].boxes.clone()
-        # boxes_copy.xyxy[:, [0, 2]] = boxes_copy.xyxy[:, [0, 2]] + pos[0]
-        # boxes_copy.xyxy[:, [1, 3]] = boxes_copy.xyxy[:, [1, 3]] + pos[1]
-        # all_predictions.append(boxes_copy)
-
-        # 每次预测后清理GPU内存
-        clean_gpu_memory()
-
-    return pred[0]
-
-
 def test_model():
     """测试模型并可视化结果"""
-    model = YOLO("runs/train/exp8/weights/best.pt")
+    model = YOLO("runs/train/exp9/weights/best.pt")
 
     os.makedirs("runs/detect/results", exist_ok=True)
 
@@ -475,6 +522,7 @@ def test_model():
     # 获取原始验证集图片
     original_val_images = set()
     for img_path in val_images:
+        # 提取原始图片名称（去掉_tile_后缀）
         original_name = img_path.stem.split("_tile_")[0]
         original_val_images.add(original_name)
 
@@ -499,41 +547,29 @@ def test_model():
         height, width = img.shape[:2]
         tiles, positions = tile_image(img, tile_size=640, overlap=128)
 
-        # 修复main.py中的缩进错误
         # 单线程处理预测
         all_predictions = []
-        # 替换main.py中相关代码，修改预测结果处理逻辑
         for tile, pos in tqdm(
             zip(tiles, positions), desc=f"预测 {original_name}", leave=False
         ):
-            pred = model.predict(tile, conf=0.25)
+            pred = model.predict(tile, conf=0.25, verbose=False)
             if len(pred) > 0 and len(pred[0].boxes) > 0:
-                # 直接提取预测结果的信息
-                boxes = pred[0].boxes.xyxy.clone()  # 克隆张量避免直接修改
-                scores = pred[0].boxes.conf.clone()
-                classes = pred[0].boxes.cls.clone()
+                # 调整预测框的坐标到原图坐标系
+                adjusted_pred = pred[0]
 
-                # 调整坐标 - 使用非原地操作
-                boxes[:, [0, 2]] = boxes[:, [0, 2]] + pos[0]
-                boxes[:, [1, 3]] = boxes[:, [1, 3]] + pos[1]
+                # 复制boxes对象以避免原地修改
+                boxes_copy = adjusted_pred.boxes.clone()
 
-                # 创建一个简单的对象实例来存储结果
-                class BoxObj:
+                # 调整坐标
+                boxes_copy.xyxy[:, [0, 2]] = boxes_copy.xyxy[:, [0, 2]] + pos[0]
+                boxes_copy.xyxy[:, [1, 3]] = boxes_copy.xyxy[:, [1, 3]] + pos[1]
+
+                # 创建新的预测对象
+                class AdjustedPred:
                     def __init__(self):
-                        self.xyxy = boxes
-                        self.conf = scores
-                        self.cls = classes
+                        self.boxes = boxes_copy
 
-                    def __len__(self):
-                        # 返回预测框的数量
-                        return len(self.xyxy)
-
-                class PredObj:
-                    def __init__(self):
-                        self.boxes = BoxObj()
-
-                adjusted_pred = PredObj()
-                all_predictions.append(adjusted_pred)
+                all_predictions.append(AdjustedPred())
 
         # 合并预测结果
         merged_boxes, merged_scores, merged_classes = merge_predictions(
@@ -559,28 +595,29 @@ def test_model():
         cv2.imwrite(f"runs/detect/results/{original_name}_result.png", result_img)
 
         # 清理内存
-        del img, result_img, tiles, positions, all_predictions
+        del img, tiles, positions, all_predictions
         gc.collect()
 
 
 def main():
     torch.backends.cudnn.benchmark = True
-    # """主函数"""
-    # if not check_dataset_ready():
-    #     print("\n数据集未准备，开始处理...")
-    #     prepare_dataset()
-    # else:
-    #     print("\n检测到已存在的数据集，跳过处理步骤...")
+    """主函数"""
+    if not check_dataset_ready():
+        print("\n数据集未准备，开始处理...")
+        prepare_dataset()
+    else:
+        print("\n检测到已存在的数据集，跳过处理步骤...")
 
-    # if not os.path.exists("dataset.yaml"):
-    #     print("\n创建数据集配置文件...")
-    #     create_dataset_yaml()
-    # else:
-    #     print("\n检测到已存在的配置文件...")
+    if not os.path.exists("dataset.yaml"):
+        print("\n创建数据集配置文件...")
+        create_dataset_yaml()
+    else:
+        print("\n检测到已存在的配置文件...")
 
-    # print("\n准备开始训练...")
-    # train_model()
-    print("直接运行推理测试...")
+    print("\n准备开始训练...")
+    train_model()
+
+    print("\n开始测试模型...")
     test_model()
 
 

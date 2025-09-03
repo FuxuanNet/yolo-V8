@@ -59,6 +59,61 @@ def tile_image(image, tile_size=640, overlap=128):
     return tiles, positions
 
 
+def apply_nms(boxes, scores=None, nms_threshold=0.3):
+    """应用非极大值抑制，改进的重复框过滤"""
+    if len(boxes) == 0:
+        return []
+
+    boxes = np.array(boxes)
+    if scores is None:
+        scores = np.ones(len(boxes))  # 如果没有置信度分数，使用1.0
+    else:
+        scores = np.array(scores)
+
+    # 多步NMS策略
+    # 第一步：标准NMS
+    xywh_boxes = boxes.copy()
+    xywh_boxes[:, 2] = xywh_boxes[:, 2] - xywh_boxes[:, 0]  # width = x2 - x1
+    xywh_boxes[:, 3] = xywh_boxes[:, 3] - xywh_boxes[:, 1]  # height = y2 - y1
+
+    indices = cv2.dnn.NMSBoxes(
+        xywh_boxes.tolist(),
+        scores.tolist(),
+        score_threshold=0.0,
+        nms_threshold=nms_threshold,
+    )
+
+    if len(indices) > 0:
+        if isinstance(indices, tuple):
+            indices = indices[0]
+        # 确保indices是numpy数组并且是一维的
+        indices = np.array(indices)
+        if indices.ndim > 1:
+            indices = indices.flatten()
+        filtered_boxes = boxes[indices]
+        filtered_scores = scores[indices]
+
+        # 第二步：额外的重复检测，基于IoU的严格过滤
+        final_boxes = []
+        final_scores = []
+
+        for i, (box, score) in enumerate(zip(filtered_boxes, filtered_scores)):
+            keep = True
+            for existing_box in final_boxes:
+                iou = compute_iou(box, existing_box)
+                if iou > 0.7:  # 更严格的IoU阈值
+                    keep = False
+                    break
+
+            if keep:
+                final_boxes.append(box)
+                final_scores.append(score)
+
+        return np.array(final_boxes)
+
+    return []
+
+
 def merge_predictions(predictions, original_shape, tile_size=640, overlap=128):
     """合并切片的预测结果"""
     height, width = original_shape[:2]
@@ -82,28 +137,30 @@ def merge_predictions(predictions, original_shape, tile_size=640, overlap=128):
         merged_scores = np.array(merged_scores)
         merged_classes = np.array(merged_classes)
 
-        # 执行NMS - 修复格式问题
-        # 将xyxy格式转换为xywh格式（x, y, width, height）
-        xywh_boxes = merged_boxes.copy()
-        xywh_boxes[:, 2] = xywh_boxes[:, 2] - xywh_boxes[:, 0]  # width = x2 - x1
-        xywh_boxes[:, 3] = xywh_boxes[:, 3] - xywh_boxes[:, 1]  # height = y2 - y1
+        # 应用改进的NMS
+        filtered_boxes = apply_nms(merged_boxes, merged_scores, nms_threshold=0.3)
 
-        # 使用正确格式调用NMS，并调整阈值
-        indices = cv2.dnn.NMSBoxes(
-            xywh_boxes.tolist(),
-            merged_scores.tolist(),
-            score_threshold=0.25,
-            nms_threshold=0.6,  # 提高NMS阈值以改善召回率
-        )
+        if len(filtered_boxes) > 0:
+            # 找到对应的分数和类别
+            filtered_scores = []
+            filtered_classes = []
+            for filtered_box in filtered_boxes:
+                # 找到最匹配的原始框
+                best_match_idx = 0
+                best_iou = 0
+                for i, orig_box in enumerate(merged_boxes):
+                    iou = compute_iou(filtered_box, orig_box)
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_match_idx = i
 
-        if len(indices) > 0:
-            if isinstance(indices, tuple):  # OpenCV 3.x returns tuple
-                indices = indices[0]
+                filtered_scores.append(merged_scores[best_match_idx])
+                filtered_classes.append(merged_classes[best_match_idx])
 
             return (
-                merged_boxes[indices],
-                merged_scores[indices],
-                merged_classes[indices],
+                filtered_boxes,
+                np.array(filtered_scores),
+                np.array(filtered_classes),
             )
 
     return [], [], []
@@ -270,31 +327,19 @@ def measure_inference_speed(
             for tile, pos in zip(tiles, positions):
                 pred = model.predict(tile, conf=0.25, verbose=False)
                 if len(pred) > 0 and len(pred[0].boxes) > 0:
-                    # 提取预测结果的信息
-                    boxes = pred[0].boxes.xyxy.clone()
-                    scores = pred[0].boxes.conf.clone()
-                    classes = pred[0].boxes.cls.clone()
+                    # 复制boxes对象以避免原地修改
+                    boxes_copy = pred[0].boxes.clone()
 
                     # 调整坐标
-                    boxes[:, [0, 2]] = boxes[:, [0, 2]] + pos[0]
-                    boxes[:, [1, 3]] = boxes[:, [1, 3]] + pos[1]
+                    boxes_copy.xyxy[:, [0, 2]] = boxes_copy.xyxy[:, [0, 2]] + pos[0]
+                    boxes_copy.xyxy[:, [1, 3]] = boxes_copy.xyxy[:, [1, 3]] + pos[1]
 
-                    # 创建简单的对象来存储结果
-                    class BoxObj:
+                    # 创建新的预测对象
+                    class AdjustedPred:
                         def __init__(self):
-                            self.xyxy = boxes
-                            self.conf = scores
-                            self.cls = classes
+                            self.boxes = boxes_copy
 
-                        def __len__(self):
-                            return len(self.xyxy)
-
-                    class PredObj:
-                        def __init__(self):
-                            self.boxes = BoxObj()
-
-                    adjusted_pred = PredObj()
-                    all_predictions.append(adjusted_pred)
+                    all_predictions.append(AdjustedPred())
 
         end_time = time.time()
         total_time += end_time - start_time
@@ -368,31 +413,19 @@ def evaluate_model():
         for tile, pos in zip(tiles, positions):
             pred = model.predict(tile, conf=0.25, verbose=False)
             if len(pred) > 0 and len(pred[0].boxes) > 0:
-                # 提取预测结果的信息
-                boxes = pred[0].boxes.xyxy.clone()
-                scores = pred[0].boxes.conf.clone()
-                classes = pred[0].boxes.cls.clone()
+                # 复制boxes对象以避免原地修改
+                boxes_copy = pred[0].boxes.clone()
 
                 # 调整坐标
-                boxes[:, [0, 2]] = boxes[:, [0, 2]] + pos[0]
-                boxes[:, [1, 3]] = boxes[:, [1, 3]] + pos[1]
+                boxes_copy.xyxy[:, [0, 2]] = boxes_copy.xyxy[:, [0, 2]] + pos[0]
+                boxes_copy.xyxy[:, [1, 3]] = boxes_copy.xyxy[:, [1, 3]] + pos[1]
 
-                # 创建简单的对象来存储结果
-                class BoxObj:
+                # 创建新的预测对象
+                class AdjustedPred:
                     def __init__(self):
-                        self.xyxy = boxes
-                        self.conf = scores
-                        self.cls = classes
+                        self.boxes = boxes_copy
 
-                    def __len__(self):
-                        return len(self.xyxy)
-
-                class PredObj:
-                    def __init__(self):
-                        self.boxes = BoxObj()
-
-                adjusted_pred = PredObj()
-                all_predictions.append(adjusted_pred)
+                all_predictions.append(AdjustedPred())
 
         # 合并预测结果
         merged_boxes, merged_scores, merged_classes = merge_predictions(
