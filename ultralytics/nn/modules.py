@@ -419,6 +419,21 @@ class C2f_EMA(C2f):
                 y[-1] = self.ema(y[-1])
         return self.cv2(torch.cat(y, 1))
 
+
+class C2f_CBAM(C2f):
+    """C2f module with CBAM attention after second Bottleneck"""
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, kernel_size=7):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.cbam = CBAM(c1=self.c, kernel_size=kernel_size)
+
+    def forward(self, x):
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        for i, m in enumerate(self.m):
+            y.append(m(y[-1]))
+            if i == 1:  # 在第二个 Bottleneck 后加 CBAM
+                y[-1] = self.cbam(y[-1])
+        return self.cv2(torch.cat(y, 1))
+
 class Proto(nn.Module):
     # YOLOv8 mask Proto module for segmentation models
     def __init__(self, c1, c_=256, c2=32):  # ch_in, number of protos, number of masks
