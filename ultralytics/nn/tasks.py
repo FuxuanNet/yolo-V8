@@ -35,6 +35,8 @@ from ultralytics.nn.modules import (
     C2f_EMA,
     CBAM,
     C2f_CBAM,
+    CA,
+    C2f_CA,
 )
 from ultralytics.yolo.utils import (
     DEFAULT_CONFIG_DICT,
@@ -531,6 +533,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C2f,
             C2f_EMA,
             C2f_CBAM,
+            C2f_CA,
             C3,
             C3TR,
             C3Ghost,
@@ -545,7 +548,19 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 c2 = make_divisible(c2 * gw, 8)
 
             args = [c1, c2, *args[1:]]
-            if m in {BottleneckCSP, C1, C2, C2f, C2f_EMA, C2f_CBAM, C3, C3TR, C3Ghost, C3x}:
+            if m in {
+                BottleneckCSP,
+                C1,
+                C2,
+                C2f,
+                C2f_EMA,
+                C2f_CA,
+                C2f_CBAM,
+                C3,
+                C3TR,
+                C3Ghost,
+                C3x,
+            }:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is nn.BatchNorm2d:

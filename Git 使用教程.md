@@ -35,6 +35,8 @@ git clone https://github.com/FuxuanNet/yolo-V8.git yolo_main
 git clone -b C2f_EMA https://github.com/FuxuanNet/yolo-V8.git yolo_C2f_EMA
 
 git clone -b C2f_SE https://github.com/FuxuanNet/yolo-V8.git yolo_C2f_SE
+
+git clone -b C2f_CA https://github.com/FuxuanNet/yolo-V8.git yolo_C2f_CA
 ```
 
 ## 设置数据集软链接

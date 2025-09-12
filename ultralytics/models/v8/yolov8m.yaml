@@ -5,18 +5,18 @@ nc: 1  # number of classes
 depth_multiple: 0.67  # scales module repeats
 width_multiple: 0.75  # scales convolution channels
 
-# YOLOv8.0m backbone (C2f -> C2f_CBAM)
+# YOLOv8.0m backbone (C2f -> C2f_CA)
 backbone:
   # [from, repeats, module, args]
   - [-1, 1, Conv, [64, 3, 2]]   # 0-P1/2
   - [-1, 1, Conv, [128, 3, 2]]  # 1-P2/4
-  - [-1, 3, C2f_CBAM, [128, True]]   # Layer 3 -> CBAM
+  - [-1, 3, C2f_CA, [128, True]]   # Layer 3 -> CA
   - [-1, 1, Conv, [256, 3, 2]]  # 3-P3/8
-  - [-1, 6, C2f_CBAM, [256, True]]   # Layer 5 -> CBAM
+  - [-1, 6, C2f_CA, [256, True]]   # Layer 5 -> CA
   - [-1, 1, Conv, [512, 3, 2]]  # 5-P4/16
-  - [-1, 6, C2f_CBAM, [512, True]]   # Layer 7 -> CBAM
+  - [-1, 6, C2f_CA, [512, True]]   # Layer 7 -> CA
   - [-1, 1, Conv, [768, 3, 2]]  # 7-P5/32
-  - [-1, 3, C2f_CBAM, [768, True]]   # Layer 9 -> CBAM
+  - [-1, 3, C2f_CA, [768, True]]   # Layer 9 -> CA
   - [-1, 1, SPPF, [768, 5]]  # 9
 
 # YOLOv8.0m head

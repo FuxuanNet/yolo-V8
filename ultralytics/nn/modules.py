@@ -15,7 +15,9 @@ from ultralytics.yolo.utils.tal import dist2bbox, make_anchors
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
     # Pad to 'same' shape outputs
     if d > 1:
-        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]  # actual kernel-size
+        k = (
+            d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]
+        )  # actual kernel-size
     if p is None:
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
@@ -27,9 +29,15 @@ class Conv(nn.Module):
 
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
         super().__init__()
-        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.conv = nn.Conv2d(
+            c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False
+        )
         self.bn = nn.BatchNorm2d(c2)
-        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+        self.act = (
+            self.default_act
+            if act is True
+            else act if isinstance(act, nn.Module) else nn.Identity()
+        )
 
     def forward(self, x):
         return self.act(self.bn(self.conv(x)))
@@ -40,13 +48,17 @@ class Conv(nn.Module):
 
 class DWConv(Conv):
     # Depth-wise convolution
-    def __init__(self, c1, c2, k=1, s=1, d=1, act=True):  # ch_in, ch_out, kernel, stride, dilation, activation
+    def __init__(
+        self, c1, c2, k=1, s=1, d=1, act=True
+    ):  # ch_in, ch_out, kernel, stride, dilation, activation
         super().__init__(c1, c2, k, s, g=math.gcd(c1, c2), d=d, act=act)
 
 
 class DWConvTranspose2d(nn.ConvTranspose2d):
     # Depth-wise transpose convolution
-    def __init__(self, c1, c2, k=1, s=1, p1=0, p2=0):  # ch_in, ch_out, kernel, stride, padding, padding_out
+    def __init__(
+        self, c1, c2, k=1, s=1, p1=0, p2=0
+    ):  # ch_in, ch_out, kernel, stride, padding, padding_out
         super().__init__(c1, c2, k, s, p1, p2, groups=math.gcd(c1, c2))
 
 
@@ -58,7 +70,11 @@ class ConvTranspose(nn.Module):
         super().__init__()
         self.conv_transpose = nn.ConvTranspose2d(c1, c2, k, s, p, bias=not bn)
         self.bn = nn.BatchNorm2d(c2) if bn else nn.Identity()
-        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+        self.act = (
+            self.default_act
+            if act is True
+            else act if isinstance(act, nn.Module) else nn.Identity()
+        )
 
     def forward(self, x):
         return self.act(self.bn(self.conv_transpose(x)))
@@ -75,7 +91,9 @@ class DFL(nn.Module):
 
     def forward(self, x):
         b, c, a = x.shape  # batch, channels, anchors
-        return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a)
+        return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(
+            b, 4, a
+        )
         # return self.conv(x.view(b, self.c1, 4, a).softmax(1)).view(b, 4, a)
 
 
@@ -104,7 +122,9 @@ class TransformerBlock(nn.Module):
         if c1 != c2:
             self.conv = Conv(c1, c2)
         self.linear = nn.Linear(c2, c2)  # learnable position embedding
-        self.tr = nn.Sequential(*(TransformerLayer(c2, num_heads) for _ in range(num_layers)))
+        self.tr = nn.Sequential(
+            *(TransformerLayer(c2, num_heads) for _ in range(num_layers))
+        )
         self.c2 = c2
 
     def forward(self, x):
@@ -117,7 +137,9 @@ class TransformerBlock(nn.Module):
 
 class Bottleneck(nn.Module):
     # Standard bottleneck
-    def __init__(self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5):  # ch_in, ch_out, shortcut, groups, kernels, expand
+    def __init__(
+        self, c1, c2, shortcut=True, g=1, k=(3, 3), e=0.5
+    ):  # ch_in, ch_out, shortcut, groups, kernels, expand
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, k[0], 1)
@@ -130,7 +152,9 @@ class Bottleneck(nn.Module):
 
 class BottleneckCSP(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(
+        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
+    ):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -139,7 +163,9 @@ class BottleneckCSP(nn.Module):
         self.cv4 = Conv(2 * c_, c2, 1, 1)
         self.bn = nn.BatchNorm2d(2 * c_)  # applied to cat(cv2, cv3)
         self.act = nn.SiLU()
-        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
+        self.m = nn.Sequential(
+            *(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n))
+        )
 
     def forward(self, x):
         y1 = self.cv3(self.m(self.cv1(x)))
@@ -149,13 +175,17 @@ class BottleneckCSP(nn.Module):
 
 class C3(nn.Module):
     # CSP Bottleneck with 3 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(
+        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
+    ):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
+        self.m = nn.Sequential(
+            *(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n))
+        )
 
     def forward(self, x):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
@@ -163,13 +193,20 @@ class C3(nn.Module):
 
 class C2(nn.Module):
     # CSP Bottleneck with 2 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(
+        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
+    ):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         self.c = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv(2 * self.c, c2, 1)  # optional act=FReLU(c2)
         # self.attention = ChannelAttention(2 * self.c)  # or SpatialAttention()
-        self.m = nn.Sequential(*(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n)))
+        self.m = nn.Sequential(
+            *(
+                Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0)
+                for _ in range(n)
+            )
+        )
 
     def forward(self, x):
         a, b = self.cv1(x).split((self.c, self.c), 1)
@@ -178,12 +215,17 @@ class C2(nn.Module):
 
 class C2f(nn.Module):
     # CSP Bottleneck with 2 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(
+        self, c1, c2, n=1, shortcut=False, g=1, e=0.5
+    ):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         self.c = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
+        self.m = nn.ModuleList(
+            Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0)
+            for _ in range(n)
+        )
 
     def forward(self, x):
         y = list(self.cv1(x).split((self.c, self.c), 1))
@@ -207,13 +249,20 @@ class SpatialAttention(nn.Module):
     # Spatial-attention module
     def __init__(self, kernel_size=7):
         super().__init__()
-        assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
+        assert kernel_size in (3, 7), "kernel size must be 3 or 7"
         padding = 3 if kernel_size == 7 else 1
         self.cv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
         self.act = nn.Sigmoid()
 
     def forward(self, x):
-        return x * self.act(self.cv1(torch.cat([torch.mean(x, 1, keepdim=True), torch.max(x, 1, keepdim=True)[0]], 1)))
+        return x * self.act(
+            self.cv1(
+                torch.cat(
+                    [torch.mean(x, 1, keepdim=True), torch.max(x, 1, keepdim=True)[0]],
+                    1,
+                )
+            )
+        )
 
 
 class CBAM(nn.Module):
@@ -244,7 +293,12 @@ class C3x(C3):
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
         super().__init__(c1, c2, n, shortcut, g, e)
         self.c_ = int(c2 * e)
-        self.m = nn.Sequential(*(Bottleneck(self.c_, self.c_, shortcut, g, k=((1, 3), (3, 1)), e=1) for _ in range(n)))
+        self.m = nn.Sequential(
+            *(
+                Bottleneck(self.c_, self.c_, shortcut, g, k=((1, 3), (3, 1)), e=1)
+                for _ in range(n)
+            )
+        )
 
 
 class C3TR(C3):
@@ -270,12 +324,14 @@ class SPP(nn.Module):
         c_ = c1 // 2  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_ * (len(k) + 1), c2, 1, 1)
-        self.m = nn.ModuleList([nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k])
+        self.m = nn.ModuleList(
+            [nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k]
+        )
 
     def forward(self, x):
         x = self.cv1(x)
         with warnings.catch_warnings():
-            warnings.simplefilter('ignore')  # suppress torch 1.9.0 max_pool2d() warning
+            warnings.simplefilter("ignore")  # suppress torch 1.9.0 max_pool2d() warning
             return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))
 
 
@@ -291,7 +347,7 @@ class SPPF(nn.Module):
     def forward(self, x):
         x = self.cv1(x)
         with warnings.catch_warnings():
-            warnings.simplefilter('ignore')  # suppress torch 1.9.0 max_pool2d() warning
+            warnings.simplefilter("ignore")  # suppress torch 1.9.0 max_pool2d() warning
             y1 = self.m(x)
             y2 = self.m(y1)
             return self.cv2(torch.cat((x, y1, y2, self.m(y2)), 1))
@@ -299,19 +355,33 @@ class SPPF(nn.Module):
 
 class Focus(nn.Module):
     # Focus wh information into c-space
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(
+        self, c1, c2, k=1, s=1, p=None, g=1, act=True
+    ):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__()
         self.conv = Conv(c1 * 4, c2, k, s, p, g, act=act)
         # self.contract = Contract(gain=2)
 
     def forward(self, x):  # x(b,c,w,h) -> y(b,4c,w/2,h/2)
-        return self.conv(torch.cat((x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]), 1))
+        return self.conv(
+            torch.cat(
+                (
+                    x[..., ::2, ::2],
+                    x[..., 1::2, ::2],
+                    x[..., ::2, 1::2],
+                    x[..., 1::2, 1::2],
+                ),
+                1,
+            )
+        )
         # return self.conv(self.contract(x))
 
 
 class GhostConv(nn.Module):
     # Ghost Convolution https://github.com/huawei-noah/ghostnet
-    def __init__(self, c1, c2, k=1, s=1, g=1, act=True):  # ch_in, ch_out, kernel, stride, groups
+    def __init__(
+        self, c1, c2, k=1, s=1, g=1, act=True
+    ):  # ch_in, ch_out, kernel, stride, groups
         super().__init__()
         c_ = c2 // 2  # hidden channels
         self.cv1 = Conv(c1, c_, k, s, None, g, act=act)
@@ -330,9 +400,15 @@ class GhostBottleneck(nn.Module):
         self.conv = nn.Sequential(
             GhostConv(c1, c_, 1, 1),  # pw
             DWConv(c_, c_, k, s, act=False) if s == 2 else nn.Identity(),  # dw
-            GhostConv(c_, c2, 1, 1, act=False))  # pw-linear
-        self.shortcut = nn.Sequential(DWConv(c1, c1, k, s, act=False), Conv(c1, c2, 1, 1,
-                                                                            act=False)) if s == 2 else nn.Identity()
+            GhostConv(c_, c2, 1, 1, act=False),
+        )  # pw-linear
+        self.shortcut = (
+            nn.Sequential(
+                DWConv(c1, c1, k, s, act=False), Conv(c1, c2, 1, 1, act=False)
+            )
+            if s == 2
+            else nn.Identity()
+        )
 
     def forward(self, x):
         return self.conv(x) + self.shortcut(x)
@@ -347,8 +423,10 @@ class Concat(nn.Module):
     def forward(self, x):
         return torch.cat(x, self.d)
 
+
 class EMA(nn.Module):
     """Efficient Multi-Scale Attention (EMA) - 安全版"""
+
     def __init__(self, channels, groups=8):
         super().__init__()
         # 自动修正 groups，避免 channels % groups != 0 报错
@@ -407,6 +485,7 @@ class EMA(nn.Module):
 
 class C2f_EMA(C2f):
     """C2f module with EMA after second Bottleneck"""
+
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, ema_groups=8):
         super().__init__(c1, c2, n, shortcut, g, e)
         self.ema = EMA(channels=self.c, groups=ema_groups)
@@ -422,6 +501,7 @@ class C2f_EMA(C2f):
 
 class C2f_CBAM(C2f):
     """C2f module with CBAM attention after second Bottleneck"""
+
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, kernel_size=7):
         super().__init__(c1, c2, n, shortcut, g, e)
         self.cbam = CBAM(c1=self.c, kernel_size=kernel_size)
@@ -434,12 +514,79 @@ class C2f_CBAM(C2f):
                 y[-1] = self.cbam(y[-1])
         return self.cv2(torch.cat(y, 1))
 
+
+class CA(nn.Module):
+    """Coordinate Attention (CA)"""
+
+    def __init__(self, channels, reduction=32):
+        super().__init__()
+        mid_channels = max(8, channels // reduction)
+
+        # 空间方向上的平均池化
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))  # 按 H 聚合
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))  # 按 W 聚合
+
+        # 共享 1x1 卷积
+        self.conv1 = nn.Conv2d(
+            channels, mid_channels, kernel_size=1, stride=1, bias=False
+        )
+        self.bn1 = nn.BatchNorm2d(mid_channels)
+        self.act = nn.ReLU(inplace=True)
+
+        # 分别生成 H 和 W 的注意力
+        self.conv_h = nn.Conv2d(
+            mid_channels, channels, kernel_size=1, stride=1, bias=False
+        )
+        self.conv_w = nn.Conv2d(
+            mid_channels, channels, kernel_size=1, stride=1, bias=False
+        )
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+
+        # 沿着 W 聚合 (保持 H 方向特征)
+        x_h = self.pool_h(x)  # [B, C, H, 1]
+        # 沿着 H 聚合 (保持 W 方向特征)，注意转置一下
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)  # [B, C, W, 1]
+
+        # 拼接
+        y = torch.cat([x_h, x_w], dim=2)  # [B, C, H+W, 1]
+        y = self.act(self.bn1(self.conv1(y)))
+
+        # 分开再生成注意力
+        x_h, x_w = torch.split(y, [H, W], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)
+
+        a_h = torch.sigmoid(self.conv_h(x_h))
+        a_w = torch.sigmoid(self.conv_w(x_w))
+
+        return x * a_h * a_w
+
+
+class C2f_CA(C2f):
+    """C2f module with Coordinate Attention (CA)"""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, reduction=32):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.ca = CA(channels=self.c, reduction=reduction)
+
+    def forward(self, x):
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        for i, m in enumerate(self.m):
+            y.append(m(y[-1]))
+            if i == 1:  # 在第二个 Bottleneck 后加 CA
+                y[-1] = self.ca(y[-1])
+        return self.cv2(torch.cat(y, 1))
+
+
 class Proto(nn.Module):
     # YOLOv8 mask Proto module for segmentation models
     def __init__(self, c1, c_=256, c2=32):  # ch_in, number of protos, number of masks
         super().__init__()
         self.cv1 = Conv(c1, c_, k=3)
-        self.upsample = nn.ConvTranspose2d(c_, c_, 2, 2, 0, bias=True)  # nn.Upsample(scale_factor=2, mode='nearest')
+        self.upsample = nn.ConvTranspose2d(
+            c_, c_, 2, 2, 0, bias=True
+        )  # nn.Upsample(scale_factor=2, mode='nearest')
         self.cv2 = Conv(c_, c_, k=3)
         self.cv3 = Conv(c_, c2)
 
@@ -473,14 +620,25 @@ class Detect(nn.Module):
         super().__init__()
         self.nc = nc  # number of classes
         self.nl = len(ch)  # number of detection layers
-        self.reg_max = 16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
+        self.reg_max = (
+            16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
+        )
         self.no = nc + self.reg_max * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
 
-        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], self.nc)  # channels
+        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(
+            ch[0], self.nc
+        )  # channels
         self.cv2 = nn.ModuleList(
-            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch)
-        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
+            nn.Sequential(
+                Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)
+            )
+            for x in ch
+        )
+        self.cv3 = nn.ModuleList(
+            nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1))
+            for x in ch
+        )
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
 
     def forward(self, x):
@@ -490,11 +648,18 @@ class Detect(nn.Module):
         if self.training:
             return x
         elif self.dynamic or self.shape != shape:
-            self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
+            self.anchors, self.strides = (
+                x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5)
+            )
             self.shape = shape
 
-        box, cls = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2).split((self.reg_max * 4, self.nc), 1)
-        dbox = dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
+        box, cls = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2).split(
+            (self.reg_max * 4, self.nc), 1
+        )
+        dbox = (
+            dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1)
+            * self.strides
+        )
         y = torch.cat((dbox, cls.sigmoid()), 1)
         return y if self.export else (y, x)
 
@@ -505,7 +670,9 @@ class Detect(nn.Module):
         # ncf = math.log(0.6 / (m.nc - 0.999999)) if cf is None else torch.log(cf / cf.sum())  # nominal class frequency
         for a, b, s in zip(m.cv2, m.cv3, m.stride):  # from
             a[-1].bias.data[:] = 1.0  # box
-            b[-1].bias.data[:m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
+            b[-1].bias.data[: m.nc] = math.log(
+                5 / m.nc / (640 / s) ** 2
+            )  # cls (.01 objects, 80 classes, 640 img)
 
 
 class Segment(Detect):
@@ -518,22 +685,33 @@ class Segment(Detect):
         self.detect = Detect.forward
 
         c4 = max(ch[0] // 4, self.nm)
-        self.cv4 = nn.ModuleList(nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nm, 1)) for x in ch)
+        self.cv4 = nn.ModuleList(
+            nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nm, 1))
+            for x in ch
+        )
 
     def forward(self, x):
         p = self.proto(x[0])  # mask protos
         bs = p.shape[0]  # batch size
 
-        mc = torch.cat([self.cv4[i](x[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2)  # mask coefficients
+        mc = torch.cat(
+            [self.cv4[i](x[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2
+        )  # mask coefficients
         x = self.detect(self, x)
         if self.training:
             return x, mc, p
-        return (torch.cat([x, mc], 1), p) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p))
+        return (
+            (torch.cat([x, mc], 1), p)
+            if self.export
+            else (torch.cat([x[0], mc], 1), (x[1], mc, p))
+        )
 
 
 class Classify(nn.Module):
     # YOLOv8 classification head, i.e. x(b,c1,20,20) to x(b,c2)
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(
+        self, c1, c2, k=1, s=1, p=None, g=1
+    ):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__()
         c_ = 1280  # efficientnet_b0 size
         self.conv = Conv(c1, c_, k, s, autopad(k, p), g)
@@ -547,6 +725,34 @@ class Classify(nn.Module):
         return self.linear(self.drop(self.pool(self.conv(x)).flatten(1)))
 
 
-__all__ = ('Classify', 'Concat', 'Conv', 'ConvTranspose', 'Detect', 'DWConv', 'DWConvTranspose2d', 'EMA', 'C2f_EMA',
-           'Ensemble', 'Focus', 'GhostConv', 'Segment', 'Bottleneck', 'BottleneckCSP', 'C1', 'C2', 'C2f', 'C3', 'C3TR', 'C3Ghost',
-           'C3x', 'GhostBottleneck', 'SPP', 'SPPF')
+__all__ = (
+    "Classify",
+    "Concat",
+    "Conv",
+    "ConvTranspose",
+    "Detect",
+    "DWConv",
+    "DWConvTranspose2d",
+    "EMA",
+    "C2f_EMA",
+    "C2f_CBAM",
+    "C2f_CA",
+    "CA",
+    "CBAM",
+    "Ensemble",
+    "Focus",
+    "GhostConv",
+    "Segment",
+    "Bottleneck",
+    "BottleneckCSP",
+    "C1",
+    "C2",
+    "C2f",
+    "C3",
+    "C3TR",
+    "C3Ghost",
+    "C3x",
+    "GhostBottleneck",
+    "SPP",
+    "SPPF",
+)
